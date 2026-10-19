@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>Lluvia Estelar: Oleadas</title>
+<style>
+html,body{margin:0;height:100%;background:#070b17;color:#fff;font-family:system-ui,sans-serif}
+body{display:flex;align-items:center;justify-content:center;overflow:hidden}
+canvas{height:min(100vh,calc(100vw*4/3));aspect-ratio:3/4;background:linear-gradient(#0b1020,#1b2450);touch-action:none;border-radius:8px}
+</style>
+</head>
+<body>
+<canvas id="c" width="480" height="640"></canvas>
+<script>
+const cv = document.getElementById('c'), ctx = cv.getContext('2d'), W = 480, H = 640;
+let state = 'menu', score = 0, lives = 3, wave = 0, toSpawn = 0, spawnT = 0, breakT = 0;
+let combo = 0, comboT = 0, mult = 1, best = 0, last = 0, tick = 0;
+let player, pb = [], eb = [], en = [], pu = [], parts = [];
+try { best = +localStorage.getItem('lluvia-best2') || 0; } catch (e) {}
+const keys = {};
+const bg = Array.from({length: 60}, () => ({x: Math.random()*W, y: Math.random()*H, s: Math.random()*1.6+.4}));
+
+function start() {
+  score = 0; lives = 3; wave = 0; toSpawn = 0; breakT = 60; combo = 0; mult = 1;
+  pb = []; eb = []; en = []; pu = []; parts = [];
+  player = {x: W/2, y: H-90, inv: 0, lvl: 1, cd: 0};
+  state = 'play';
+}
+function end() {
+  state = 'over';
+  if (score > best) { best = score; try { localStorage.setItem('lluvia-best2', best); } catch (e) {} }
+}
+
+addEventListener('keydown', e => {
+  const k = e.key.toLowerCase(); keys[k] = true;
+  if (['arrowleft','arrowright','arrowup','arrowdown',' '].includes(k)) e.preventDefault();
+  if ((k === 'enter' || k === ' ') && (state === 'menu' || state === 'over')) start();
+  if (k === 'p') state = state === 'play' ? 'pause' : state === 'pause' ? 'play' : state;
+});
+addEventListener('keyup', e => keys[e.key.toLowerCase()] = false);
+
+let lx = 0, ly = 0;
+cv.addEventListener('pointerdown', e => {
+  lx = e.clientX; ly = e.clientY;
+  if (state === 'menu' || state === 'over') start(); else if (state === 'pause') state = 'play';
+});
+cv.addEventListener('pointermove', e => {
+  if (state === 'play' && e.buttons) {
+    const k = W / cv.getBoundingClientRect().width;
+    player.x += (e.clientX - lx) * k; player.y += (e.clientY - ly) * k;
+  }
+  lx = e.clientX; ly = e.clientY;
+});
+
+const burst = (x, y, c, n = 14) => { for (let i = 0; i < n; i++) parts.push({x, y, vx: (Math.random()-.5)*7, vy: (Math.random()-.5)*7, life: 30, c}); };
+const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+
+function startWave() {
+  wave++; spawnT = 30;
+  if (wave % 5 === 0) {
+    toSpawn = 4; const hp = 50 + wave * 8;
+    en.push({t: 3, x: W/2, x0: W/2, y: -60, age: 0, dir: 1, hp, max: hp, r: 34, fire: 90, ang: 0});
+  } else toSpawn = 6 + wave * 3;
+}
+function spawnEnemy() {
+  const r = Math.random();
+  const shooter = wave >= 2 ? Math.min(.45, .12 + wave*.05) : 0;
+  const zig = wave >= 2 ? Math.min(.4, .15 + wave*.04) : 0;
+  const t = r < shooter ? 2 : r < shooter + zig ? 1 : 0;
+  const x = 60 + Math.random() * (W - 120);
+  en.push({t, x, x0: x, y: -30, age: 0, dir: Math.random() < .5 ? -1 : 1,
+    hp: [1, 2, 5][t] + (wave > 6 ? 1 : 0), r: [14, 15, 18][t], fire: 50 + Math.random()*50});
+}
+function hurt() {
+  if (player.inv > 0) return;
+  lives--; player.inv = 90; player.lvl = Math.max(1, player.lvl - 1);
+  combo = 0; mult = 1; eb = eb.filter(b => dist(b, player) > 90);
+  burst(player.x, player.y, '#5ee0ff', 24);
+  if (lives <= 0) end();
+}
+function shoot() {
+  const L = player.lvl, add = (dx, vx) => pb.push({x: player.x + dx, y: player.y - 14, vx, vy: -11});
+  if (L === 1) add(0, 0);
+  else if (L === 2) { add(-8, 0); add(8, 0); }
+  else { add(0, 0); add(-10, -1.8); add(10, 1.8); }
+}
+
+function update(dt) {
+  tick += dt;
+  // movimiento (Shift = modo preciso)
+  const sp = keys.shift ? 2.8 : 5.5;
+  let dx = (keys.arrowright || keys.d ? 1 : 0) - (keys.arrowleft || keys.a ? 1 : 0);
+  let dy = (keys.arrowdown || keys.s ? 1 : 0) - (keys.arrowup || keys.w ? 1 : 0);
+  if (dx && dy) { dx *= .707; dy *= .707; }
+  player.x += dx * sp * dt; player.y += dy * sp * dt;
+  player.x = Math.max(12, Math.min(W - 12, player.x));
+  player.y = Math.max(60, Math.min(H - 20, player.y));
+  if (player.inv > 0) player.inv -= dt;
+  if ((player.cd -= dt) <= 0) { player.cd = 9; shoot(); }
+
+  // oleadas
+  if (breakT > 0) { breakT -= dt; if (breakT <= 0) startWave(); }
+  else {
+    spawnT -= dt;
+    if (toSpawn > 0 && spawnT <= 0) { spawnEnemy(); toSpawn--; spawnT = Math.max(14, 44 - wave*2); }
+    else if (toSpawn === 0 && !en.length) { score += 100 * wave; breakT = 130; }
+  }
+
+  // enemigos
+  for (let i = en.length - 1; i >= 0; i--) {
+    const e = en[i]; e.age += dt;
+    if (e.t === 0) e.y += (2.2 + wave*.14) * dt;
+    else if (e.t === 1) { e.y += (1.6 + wave*.08) * dt; e.x = e.x0 + Math.sin(e.age*.05) * 90; }
+    else if (e.t === 2) {
+      if (e.y < 110 || e.age > 500) e.y += 2 * dt;
+      else { e.x += e.dir * 1.4 * dt; if (e.x < 30 || e.x > W - 30) e.dir *= -1; }
+      if ((e.fire -= dt) <= 0 && e.y > 20) {
+        e.fire = Math.max(55, 110 - wave*4);
+        const a = Math.atan2(player.y - e.y, player.x - e.x), s = Math.min(6, 3.2 + wave*.1);
+        const n = wave >= 5 ? 3 : 1;
+        for (let k = 0; k < n; k++) { const aa = a + (k - (n-1)/2) * .28; eb.push({x: e.x, y: e.y, vx: Math.cos(aa)*s, vy: Math.sin(aa)*s, r: 5}); }
+      }
+    } else { // jefe: 3 fases segun su vida
+      if (e.y < 90) e.y += 1.5 * dt;
+      else {
+        e.x = W/2 + Math.sin(e.age * .02) * 160;
+        const ph = e.hp > e.max * .66 ? 0 : e.hp > e.max * .33 ? 1 : 2;
+        if ((e.fire -= dt) <= 0) {
+          const s = 3 + ph * .5 + wave * .05;
+          if (ph === 0) { // abanico apuntado
+            const a = Math.atan2(player.y - e.y, player.x - e.x);
+            for (let k = -2; k <= 2; k++) eb.push({x: e.x, y: e.y, vx: Math.cos(a + k*.22)*s, vy: Math.sin(a + k*.22)*s, r: 6});
+            e.fire = 55;
+          } else if (ph === 1) { // anillo con huecos aleatorios
+            const off = Math.random() * 6;
+            for (let k = 0; k < 14; k++) { const a = off + k * Math.PI * 2 / 14; eb.push({x: e.x, y: e.y, vx: Math.cos(a)*s*.8, vy: Math.sin(a)*s*.8, r: 6}); }
+            e.fire = 70;
+          } else { // espiral
+            e.ang += .45;
+            for (let k = 0; k < 3; k++) { const a = e.ang + k * Math.PI * 2 / 3; eb.push({x: e.x, y: e.y, vx: Math.cos(a)*s, vy: Math.sin(a)*s, r: 5}); }
+            e.fire = 10;
+          }
+        }
+      }
+    }
+    if (e.y > H + 30) { en.splice(i, 1); continue; }
+    if (dist(e, player) < e.r * .8 + 4) { hurt(); if (state !== 'play') return; }
+  }
+
+  // balas del jugador
+  for (let i = pb.length - 1; i >= 0; i--) {
+    const b = pb[i]; b.x += b.vx * dt; b.y += b.vy * dt;
+    let gone = b.y < -10;
+    for (let j = 0; j < en.length && !gone; j++) {
+      const e = en[j];
+      if (dist(b, e) < e.r + 3) {
+        gone = true; e.hp--;
+        if (e.hp <= 0) {
+          en.splice(j, 1);
+          score += [10, 20, 40, 500][e.t] * mult;
+          combo++; comboT = 90; mult = Math.min(5, 1 + Math.floor(combo / 5));
+          burst(e.x, e.y, ['#ff6a6a', '#c58aff', '#ffa94d', '#ff3b6b'][e.t], e.t === 3 ? 60 : 14);
+          if (e.t === 3) eb = [];
+          if (Math.random() < [0, .05, .2, 1][e.t]) pu.push({x: e.x, y: e.y});
+        }
+      }
+    }
+    if (gone) pb.splice(i, 1);
+  }
+  if ((comboT -= dt) <= 0) { combo = 0; mult = 1; }
+
+  // balas enemigas
+  for (let i = eb.length - 1; i >= 0; i--) {
+    const b = eb[i]; b.x += b.vx * dt; b.y += b.vy * dt;
+    if (b.x < -20 || b.x > W + 20 || b.y < -20 || b.y > H + 20) { eb.splice(i, 1); continue; }
+    if (dist(b, player) < b.r + 3) { eb.splice(i, 1); hurt(); if (state !== 'play') return; }
+  }
+
+  // power-ups
+  for (let i = pu.length - 1; i >= 0; i--) {
+    const p = pu[i]; p.y += 2 * dt;
+    if (dist(p, player) < 22) { pu.splice(i, 1); if (player.lvl < 3) player.lvl++; else score += 200; score += 50; }
+    else if (p.y > H + 20) pu.splice(i, 1);
+  }
+  parts.forEach(p => { p.x += p.vx*dt; p.y += p.vy*dt; p.life -= dt; });
+  parts = parts.filter(p => p.life > 0);
+}
+
+function text(s, x, y, size, color = '#fff', align = 'center') {
+  ctx.fillStyle = color; ctx.font = `bold ${size}px system-ui,sans-serif`; ctx.textAlign = align; ctx.fillText(s, x, y);
+}
+function poly(x, y, r, n, rot, color) {
+  ctx.fillStyle = color; ctx.beginPath();
+  for (let i = 0; i < n; i++) { const a = rot + i * 2 * Math.PI / n; ctx[i ? 'lineTo' : 'moveTo'](x + Math.cos(a)*r, y + Math.sin(a)*r); }
+  ctx.closePath(); ctx.fill();
+}
+
+function draw() {
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = 'rgba(255,255,255,.5)';
+  bg.forEach(s => { s.y = (s.y + s.s * .4) % H; ctx.fillRect(s.x, s.y, s.s, s.s); });
+
+  if (player && state !== 'menu') {
+    ctx.fillStyle = '#5ee0ff'; pb.forEach(b => ctx.fillRect(b.x - 2, b.y - 7, 4, 12));
+    en.forEach(e => {
+      poly(e.x, e.y, e.r, [3, 4, 6, 8][e.t], [Math.PI/2, 0, 0, Math.PI/8][e.t], ['#ff6a6a', '#c58aff', '#ffa94d', '#ff3b6b'][e.t]);
+      if (e.t === 3) { ctx.fillStyle = '#333'; ctx.fillRect(W/2 - 100, 66, 200, 8); ctx.fillStyle = '#ff3b6b'; ctx.fillRect(W/2 - 100, 66, 200 * Math.max(0, e.hp) / e.max, 8); }
+    });
+    eb.forEach(b => { ctx.fillStyle = '#ff4d8d'; ctx.beginPath(); ctx.arc(b.x, b.y, b.r, 0, 7); ctx.fill();
+      ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; ctx.stroke(); });
+    pu.forEach(p => { ctx.fillStyle = '#4dff9a'; ctx.beginPath(); ctx.arc(p.x, p.y, 12, 0, 7); ctx.fill(); text('P', p.x, p.y + 5, 14, '#063'); });
+    parts.forEach(p => { ctx.globalAlpha = p.life / 30; ctx.fillStyle = p.c; ctx.fillRect(p.x, p.y, 4, 4); });
+    ctx.globalAlpha = 1;
+    if (!(player.inv > 0 && Math.floor(player.inv / 6) % 2)) {
+      ctx.fillStyle = '#5ee0ff'; ctx.beginPath();
+      ctx.moveTo(player.x, player.y - 16); ctx.lineTo(player.x + 14, player.y + 12); ctx.lineTo(player.x - 14, player.y + 12);
+      ctx.closePath(); ctx.fill();
+      ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(player.x, player.y, 3, 0, 7); ctx.fill(); // hitbox real
+    }
+    text('Puntos: ' + score, 16, 28, 20, '#fff', 'left');
+    text('Récord: ' + best + '   Oleada ' + wave, 16, 48, 13, '#9fb0e0', 'left');
+    if (mult > 1) text('COMBO x' + mult, W/2, 28, 20, '#ffd84a');
+    for (let i = 0; i < 3; i++) text('♥', W - 14 - i*28, 32, 26, i < lives ? '#ff5a7a' : '#3a3f5c', 'right');
+    if (breakT > 0 && state === 'play') text((wave + 1) % 5 === 0 ? '¡JEFE!' : 'Oleada ' + (wave + 1), W/2, 280, 36, '#ffd84a');
+  }
+
+  if (state !== 'play') {
+    ctx.fillStyle = 'rgba(7,11,23,.78)'; ctx.fillRect(0, 0, W, H);
+    if (state === 'menu') {
+      text('Lluvia Estelar', W/2, 170, 42);
+      text('OLEADAS', W/2, 210, 24, '#ffd84a');
+      text('Dispara automático. Destruye enemigos y esquiva sus balas.', W/2, 270, 14, '#cfd8ff');
+      text('Solo el punto blanco de la nave recibe daño.', W/2, 296, 14, '#cfd8ff');
+      text('Combos seguidos multiplican tu puntuación (hasta x5).', W/2, 322, 14, '#cfd8ff');
+      text('Recoge P para mejorar el disparo; un golpe lo reduce.', W/2, 348, 14, '#cfd8ff');
+      text('Flechas/WASD mover · Shift = modo preciso · P pausa', W/2, 390, 14, '#9fb0e0');
+      text('Móvil: arrastra el dedo · Cada 5 oleadas aparece un JEFE', W/2, 412, 14, '#ff9a9a');
+      text('Enter o toca para jugar', W/2, 470, 22);
+    } else if (state === 'over') {
+      text('Fin del juego', W/2, 230, 42, '#ff5a7a');
+      text('Puntos: ' + score + ' · Oleada ' + wave, W/2, 290, 24);
+      text(score >= best && score > 0 ? '¡Nuevo récord!' : 'Récord: ' + best, W/2, 330, 20, '#ffd84a');
+      text('Enter o toca para reintentar', W/2, 400, 20);
+    } else text('Pausa — pulsa P', W/2, H/2, 32);
+  }
+}
+
+function loop(now) {
+  const dt = Math.min(2, (now - last) / 16.67 || 1); last = now;
+  if (state === 'play') update(dt);
+  draw();
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
